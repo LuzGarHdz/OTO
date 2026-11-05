@@ -138,15 +138,17 @@ final class FocusTimer: ObservableObject {
     
     func setMinutes(_ m: Int) {
         stop()
-        total = m * 60
+        total = max(1, min(m, 90)) * 60
         remaining = total
     }
     func toggle() { running ? stop() : start() }
     func start() {
+        guard !running, timer == nil, remaining > 0 else { return }
         running = true
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            if self.remaining > 0 { self.remaining -= 1 } else { self.stop() }
+            self.remaining = max(0, self.remaining - 1)
+            if self.remaining == 0 { self.stop() }
         }
     }
     func stop() {
@@ -155,6 +157,8 @@ final class FocusTimer: ObservableObject {
         timer = nil
     }
     func reset() { stop(); remaining = total }
+
+    deinit { timer?.invalidate() }
 }
 
 // MARK: - Helpers de fecha
@@ -635,129 +639,6 @@ struct SessionBlock: View {
         .background(color.opacity(0.14))
         .overlay(Rectangle().fill(color).frame(width: 3), alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
-// MARK: - Enfoque (Premium)
-
-enum FocusMode: String, CaseIterable, Identifiable {
-    case pomodoro, extremo, personalizado
-    var id: String { rawValue }
-}
-
-struct FocusView: View {
-    @EnvironmentObject var store: AppStore
-    @EnvironmentObject var timer: FocusTimer
-    @State private var mode: FocusMode = .pomodoro
-    @State private var customMinutes = 30.0
-    @State private var showPaywall = false
-    
-    var body: some View {
-        Screen {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Elige cómo avanzar").font(.system(size: 34, weight: .semibold))
-                Text("Protege este tiempo. El resto puede esperar.")
-                    .font(.subheadline).foregroundColor(Theme.muted)
-            }
-            
-            modeCard(.pomodoro, icon: "clock", title: "Pomodoro",
-                     detail: "25 minutos de concentración y una pausa breve.",
-                     tag: "RECOMENDADO", dark: false)
-            modeCard(.extremo, icon: "viewfinder", title: "Modo extremo",
-                     detail: "Bloquea distracciones durante 50 minutos.",
-                     tag: "OTO PLUS", dark: true)
-            modeCard(.personalizado, icon: "gearshape", title: "Personalizado",
-                     detail: "Adapta el bloque a tu energía y disponibilidad.",
-                     tag: "15–90 MIN", dark: false)
-            
-            if mode == .personalizado {
-                VStack(alignment: .leading) {
-                    Text("Duración: \(Int(customMinutes)) min").font(.subheadline.weight(.medium))
-                    Slider(value: $customMinutes, in: 15...90, step: 5) { _ in
-                        timer.setMinutes(Int(customMinutes))
-                    }
-                }
-                .card()
-            }
-            
-            VStack(spacing: 14) {
-                VStack(spacing: 4) {
-                    Text("SESIÓN ACTUAL").font(.system(size: 10, weight: .semibold)).tracking(1)
-                        .foregroundColor(Theme.accent)
-                    Text(store.pending.first?.title ?? "Sin tarea seleccionada")
-                        .font(.headline)
-                    if let t = store.pending.first {
-                        Text("\(t.subject) · Entrega \(dueLabel(t.due).lowercased())")
-                            .font(.caption).foregroundColor(Theme.muted)
-                    }
-                }
-                Text(timer.display)
-                    .font(.system(size: 60, weight: .medium, design: .rounded))
-                    .monospacedDigit()
-                ProgressView(value: timer.progress)
-                HStack(spacing: 12) {
-                    Button { timer.reset() } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                            .frame(width: 52, height: 52)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.3)))
-                    }
-                    Button { timer.toggle() } label: {
-                        Label(timer.running ? "Pausar" : "Iniciar",
-                              systemImage: timer.running ? "pause.fill" : "play.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .background(Theme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .card()
-        }
-        .alert("Oto Plus", isPresented: $showPaywall) {
-            Button("Desbloquear") { store.isPlus = true; select(.extremo) }
-            Button("Ahora no", role: .cancel) {}
-        } message: {
-            Text("El modo extremo bloquea distracciones y notificaciones durante 50 minutos. Disponible con Oto Plus.")
-        }
-    }
-    
-    private func select(_ m: FocusMode) {
-        mode = m
-        switch m {
-        case .pomodoro: timer.setMinutes(25)
-        case .extremo: timer.setMinutes(50)
-        case .personalizado: timer.setMinutes(Int(customMinutes))
-        }
-    }
-    
-    private func modeCard(_ m: FocusMode, icon: String, title: String, detail: String, tag: String, dark: Bool) -> some View {
-        Button {
-            if m == .extremo && !store.isPlus { showPaywall = true } else { select(m) }
-        } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: icon)
-                    .frame(width: 46, height: 46)
-                    .background(dark ? Color.white.opacity(0.12) : Color.gray.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .padding(.bottom, 8)
-                Text(title).font(.headline)
-                Text(detail).font(.caption).opacity(0.7).multilineTextAlignment(.leading)
-                Text(tag).font(.system(size: 10, weight: .bold)).foregroundColor(dark ? Color(red: 0.75, green: 0.70, blue: 1) : Theme.accent)
-            }
-            .foregroundColor(dark ? .white : .primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(20)
-            .background(dark ? Theme.dark : Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(mode == m ? Theme.accent : Color.clear, lineWidth: 2)
-            )
-            .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
-        }
-        .buttonStyle(.plain)
     }
 }
 

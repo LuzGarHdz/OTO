@@ -10,7 +10,7 @@ import AppleProductTypes
 let package = Package(
     name: "OTO",
     platforms: [
-        .iOS("26.0")
+        .iOS("18.7")
     ],
     products: [
         .iOSApplication(

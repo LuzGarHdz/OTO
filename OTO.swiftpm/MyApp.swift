@@ -89,6 +89,7 @@ final class AppStore: ObservableObject {
     @Published var timeZone = "Madrid (GMT+2)"
     @Published var dailySummary = true
     @Published var focusSounds = false
+    @Published private(set) var focusHistory: [FocusSession] = FocusHistoryStorage.load()
     
     let sessions: [StudySession] = [
         .init(dayOffset: 0, time: "10:00 · 45 MIN", minutes: 45, subject: "Matemáticas", topic: "Ejercicios"),
@@ -125,41 +126,17 @@ final class AppStore: ObservableObject {
         if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i].done.toggle() }
     }
     func delete(_ task: TaskItem) { tasks.removeAll { $0.id == task.id } }
+
+    func recordFocusSession(id: UUID, mode: String, minutes: Int, taskTitle: String?) {
+        guard !focusHistory.contains(where: { $0.id == id }) else { return }
+        let entry = FocusSession(id: id, completedAt: Date(), mode: mode, minutes: minutes, taskTitle: taskTitle)
+        focusHistory.insert(entry, at: 0)
+        FocusHistoryStorage.save(focusHistory)
+    }
 }
 
-final class FocusTimer: ObservableObject {
-    @Published var total = 25 * 60
-    @Published var remaining = 25 * 60
-    @Published var running = false
-    private var timer: Timer?
-    
-    var display: String { String(format: "%02d:%02d", remaining / 60, remaining % 60) }
-    var progress: Double { total == 0 ? 0 : 1 - Double(remaining) / Double(total) }
-    
-    func setMinutes(_ m: Int) {
-        stop()
-        total = max(1, min(m, 90)) * 60
-        remaining = total
-    }
-    func toggle() { running ? stop() : start() }
-    func start() {
-        guard !running, timer == nil, remaining > 0 else { return }
-        running = true
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            self.remaining = max(0, self.remaining - 1)
-            if self.remaining == 0 { self.stop() }
-        }
-    }
-    func stop() {
-        running = false
-        timer?.invalidate()
-        timer = nil
-    }
-    func reset() { stop(); remaining = total }
-    
-    deinit { timer?.invalidate() }
-}
+
+
 
 // MARK: - Helpers de fecha
 
@@ -208,6 +185,177 @@ struct RootView: View {
         .sheet(isPresented: $store.showAdd) { AddTaskSheet() }
     }
 }
+
+@MainActor
+final class FocusTimer: ObservableObject {
+    @Published private(set) var total = 25 * 60
+    @Published private(set) var remaining = 25 * 60
+    @Published private(set) var running = false
+    @Published private(set) var hasStarted = false
+    @Published private(set) var completionPending = false
+
+    private var timer: Timer?
+    private var endDate: Date?
+    private let storageKey = "oto.focus.timer.v1"
+    private var sessionID = UUID()
+    @Published private(set) var selectedTaskTitle: String? = nil
+    @Published private(set) var selectedTaskID: UUID? = nil
+
+    private struct SavedState: Codable {
+        let total: Int
+        let remaining: Int
+        let running: Bool
+        let endDate: Date?
+        let hasStarted: Bool?
+        let completionPending: Bool?
+        let sessionID: UUID?
+        let selectedTaskTitle: String?
+        let selectedTaskID: UUID?
+    }
+
+    init() { restore() }
+
+    var display: String { String(format: "%02d:%02d", remaining / 60, remaining % 60) }
+    var progress: Double {
+        guard total > 0 else { return 0 }
+        return min(1, max(0, 1 - Double(remaining) / Double(total)))
+    }
+    var canChangeMode: Bool { !hasStarted && !completionPending }
+
+    func setMinutes(_ minutes: Int) {
+        guard canChangeMode else { return }
+        stopTicker()
+        total = max(1, min(minutes, 90)) * 60
+        remaining = total
+        running = false
+        endDate = nil
+        sessionID = UUID()
+        save()
+    }
+
+    func selectTask(_ task: TaskItem?) {
+        guard canChangeMode else { return }
+        selectedTaskID = task?.id
+        selectedTaskTitle = task?.title
+        save()
+    }
+
+    func toggle() { running ? pause() : start() }
+
+    func start() {
+        guard !running, remaining > 0, !completionPending else { return }
+        hasStarted = true
+        endDate = Date().addingTimeInterval(TimeInterval(remaining))
+        running = true
+        save()
+        startTicker()
+    }
+
+    func pause() {
+        guard running else { return }
+        updateRemaining()
+        guard running else { return }
+        running = false
+        endDate = nil
+        stopTicker()
+        save()
+    }
+
+    func stop() { pause() }
+
+    func reset() {
+        stopTicker()
+        running = false
+        endDate = nil
+        remaining = total
+        hasStarted = false
+        completionPending = false
+        sessionID = UUID()
+        selectedTaskID = nil
+        selectedTaskTitle = nil
+        save()
+    }
+
+    func discardSession() { reset() }
+
+    // Returns an identifier exactly once for the confirmed session.
+    func confirmCompletion() -> (id: UUID, minutes: Int, taskTitle: String?)? {
+        refresh()
+        guard completionPending, remaining == 0 else { return nil }
+        let result = (id: sessionID, minutes: total / 60, taskTitle: selectedTaskTitle)
+        reset()
+        return result
+    }
+
+    func refresh() {
+        updateRemaining()
+        if running && timer == nil { startTicker() }
+    }
+
+    private func startTicker() {
+        stopTicker()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateRemaining() }
+        }
+    }
+
+    private func stopTicker() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func updateRemaining() {
+        guard running, let endDate else { return }
+        remaining = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
+        if remaining == 0 {
+            running = false
+            self.endDate = nil
+            hasStarted = true
+            completionPending = true
+            stopTicker()
+            save()
+        }
+    }
+
+    private func save() {
+        let state = SavedState(total: total, remaining: remaining, running: running,
+                               endDate: endDate, hasStarted: hasStarted,
+                               completionPending: completionPending, sessionID: sessionID,
+                              selectedTaskTitle: selectedTaskTitle, selectedTaskID: selectedTaskID)
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        UserDefaults.standard.set(data, forKey: storageKey)
+    }
+
+    private func restore() {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let state = try? JSONDecoder().decode(SavedState.self, from: data) else { return }
+        total = max(60, min(state.total, 90 * 60))
+        remaining = max(0, min(state.remaining, total))
+        sessionID = state.sessionID ?? UUID()
+        selectedTaskTitle = state.selectedTaskTitle
+        selectedTaskID = state.selectedTaskID
+        hasStarted = state.hasStarted ?? (state.running || remaining < total)
+        completionPending = state.completionPending ?? (hasStarted && remaining == 0)
+        if completionPending {
+            remaining = 0
+            running = false
+            endDate = nil
+        } else if state.running, let savedEndDate = state.endDate {
+            endDate = savedEndDate
+            running = true
+            hasStarted = true
+            updateRemaining()
+            if running { startTicker() }
+        } else {
+            running = false
+            endDate = nil
+        }
+        save()
+    }
+
+    deinit { timer?.invalidate() }
+}
+
 
 // MARK: - Contenedor con barra superior
 
@@ -441,13 +589,14 @@ struct FocusSummaryCard: View {
                 .monospacedDigit()
             ProgressView(value: timer.progress).tint(.white)
             Button { timer.toggle() } label: {
-                Label(timer.running ? "Pausar" : "Iniciar", systemImage: timer.running ? "pause.fill" : "play.fill")
+                Label(timer.completionPending ? "Finaliza en Enfoque" : (timer.running ? "Pausar" : "Iniciar"), systemImage: timer.running ? "pause.fill" : "play.fill")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(Theme.dark)
                     .frame(maxWidth: .infinity).padding(.vertical, 14)
                     .background(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .disabled(timer.completionPending)
         }
         .foregroundColor(.white)
         .padding(20)

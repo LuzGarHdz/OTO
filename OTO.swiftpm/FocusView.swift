@@ -13,7 +13,7 @@ struct FocusView: View {
     @State private var mode: FocusMode = .pomodoro
     @State private var customMinutes = 30.0
     @State private var showPaywall = false
-    
+
     var body: some View {
         Screen {
             VStack(alignment: .leading, spacing: 6) {
@@ -21,7 +21,7 @@ struct FocusView: View {
                 Text("Protege este tiempo. El resto puede esperar.")
                     .font(.subheadline).foregroundColor(Theme.muted)
             }
-            
+
             modeCard(.pomodoro, icon: "clock", title: "Pomodoro",
                      detail: "25 minutos de concentración y una pausa breve.",
                      tag: "RECOMENDADO", dark: false)
@@ -31,7 +31,7 @@ struct FocusView: View {
             modeCard(.personalizado, icon: "gearshape", title: "Personalizado",
                      detail: "Adapta el bloque a tu energía y disponibilidad.",
                      tag: "15–90 MIN", dark: false)
-            
+
             VStack(spacing: 14) {
                 VStack(spacing: 4) {
                     Text("SESIÓN ACTUAL").font(.system(size: 10, weight: .semibold)).tracking(1)
@@ -87,7 +87,7 @@ struct FocusView: View {
             Text("El modo extremo ofrece sesiones de 50 minutos con OTO Plus. Puedes desbloquearlo en esta demo sin realizar pagos. Esta versión no bloquea notificaciones.")
         }
     }
-    
+
     private func select(_ m: FocusMode) {
         guard m != .extremo || store.isPlus else { return }
         mode = m
@@ -97,7 +97,7 @@ struct FocusView: View {
         case .personalizado: timer.setMinutes(Int(customMinutes))
         }
     }
-    
+
     private func modeCard(_ m: FocusMode, icon: String, title: String, detail: String, tag: String, dark: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Button {
@@ -128,7 +128,7 @@ struct FocusView: View {
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(mode == m ? [.isSelected] : [])
-            
+
             if m == .personalizado && mode == .personalizado {
                 Divider()
                 Text("Duración: \(Int(customMinutes)) min")

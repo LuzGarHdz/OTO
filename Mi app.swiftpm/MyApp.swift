@@ -205,6 +205,9 @@ struct RootView: View {
             FocusView().tabItem { Label("Enfoque", systemImage: "viewfinder") }.tag(3)
             SettingsView().tabItem { Label("Ajustes", systemImage: "gearshape") }.tag(4)
         }
+        .tabViewStyle(.automatic)
+        .toolbarBackground(Color.white, for: .tabBar) // Forzar fondo blanco sólido en el footer
+        .toolbarBackground(.visible, for: .tabBar)     // Asegurar que siempre se muestre opaco
         .sheet(isPresented: $store.showAdd) { AddTaskSheet() }
     }
 }
@@ -239,11 +242,13 @@ struct Screen<Content: View>: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) { content() }
                     .padding(20)
+                    .padding(.bottom, 60) // Espacio extra para que el contenido no quede detrás del footer
                     .frame(maxWidth: 700)
                     .frame(maxWidth: .infinity)
             }
             .background(Theme.background)
         }
+        .background(Color.white) // Fuerza fondo blanco en la base de la pantalla
     }
 }
 

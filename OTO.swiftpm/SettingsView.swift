@@ -2,12 +2,9 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var timer: FocusTimer
     @State private var section = "Perfil"
     private let sections = ["Perfil", "Enfoque", "Calendario", "Apariencia"]
-    @State private var defaultFocus = 25
-    @State private var weekStartsMonday = true
-    @State private var syncCalendar = false
-    @State private var darkMode = false
     
     var body: some View {
         Screen {
@@ -29,7 +26,7 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(8).background(Color.white)
+            .padding(8).background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             
             VStack(alignment: .leading, spacing: 16) {
@@ -62,18 +59,23 @@ struct SettingsView: View {
             field("Correo", text: $store.email, keyboard: .emailAddress)
             field("Zona horaria", text: $store.timeZone)
             Divider()
-            toggleRow("Resumen diario", "Recibe tu plan cada mañana.", $store.dailySummary)
-            Divider()
-            toggleRow("Sonidos de enfoque", "Ruido blanco durante tus sesiones.", $store.focusSounds)
+            toggleRow("Resumen diario", "Recibe tu plan cada mañana.", $store.dailySummary, soon: true)
         }
     }
     
     private var focus: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Enfoque").font(.headline)
-            Stepper("Duración por defecto: \(defaultFocus) min", value: $defaultFocus, in: 15...90, step: 5)
+            Stepper("Duración personalizada: \(store.defaultFocus) min",
+                    value: $store.defaultFocus, in: 15...90, step: 5)
+            .onChange(of: store.defaultFocus) { _, minutes in
+                timer.customMinutes = Double(minutes)
+                if timer.mode == .personalizado { timer.setMinutes(minutes) }
+            }
+            Text("Es la duración inicial del modo Personalizado.")
+                .font(.caption).foregroundColor(Theme.muted)
             Divider()
-            toggleRow("Sonidos de enfoque", "Ruido blanco durante tus sesiones.", $store.focusSounds)
+            toggleRow("Sonidos de enfoque", "Ruido blanco durante tus sesiones.", $store.focusSounds, soon: true)
             Divider()
             toggleRow("Oto Plus", "Desbloquea modo extremo y más.", $store.isPlus)
         }
@@ -82,16 +84,16 @@ struct SettingsView: View {
     private var calendar: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Calendario").font(.headline)
-            toggleRow("La semana empieza el lunes", "Cambia el inicio de semana en el plan.", $weekStartsMonday)
+            toggleRow("La semana empieza el lunes", "Cambia el inicio de semana en el plan.", $store.weekStartsMonday)
             Divider()
-            toggleRow("Sincronizar calendario", "Importa tus eventos para planear mejor.", $syncCalendar)
+            toggleRow("Sincronizar calendario", "Importa tus eventos para planear mejor.", $store.syncCalendar, soon: true)
         }
     }
     
     private var appearance: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Apariencia").font(.headline)
-            toggleRow("Modo oscuro", "Usa colores oscuros en la app.", $darkMode)
+            toggleRow("Modo oscuro", "Usa colores oscuros en la app.", $store.darkMode)
         }
     }
     
@@ -100,20 +102,22 @@ struct SettingsView: View {
             Text(label).font(.caption.weight(.semibold))
             TextField(label, text: text)
                 .keyboardType(keyboard)
+                .textInputAutocapitalization(keyboard == .emailAddress ? .never : .words)
+                .autocorrectionDisabled(keyboard == .emailAddress)
                 .padding(14)
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.25)))
         }
     }
     
-    private func toggleRow(_ title: String, _ subtitle: String, _ value: Binding<Bool>) -> some View {
+    private func toggleRow(_ title: String, _ subtitle: String, _ value: Binding<Bool>, soon: Bool = false) -> some View {
         Toggle(isOn: value) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline.weight(.semibold))
-                Text(subtitle).font(.caption).foregroundColor(Theme.muted)
+                Text(soon ? subtitle + " Próximamente." : subtitle)
+                    .font(.caption).foregroundColor(Theme.muted)
             }
         }
         .tint(Theme.accent)
+        .disabled(soon)
     }
 }
-
-// MARK: - Nueva tarea

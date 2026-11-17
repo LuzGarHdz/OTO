@@ -12,25 +12,30 @@ struct TasksView: View {
         case .completadas: base = store.completed
         case .todas: base = store.tasks.sorted { $0.due < $1.due }
         }
+        base = store.filtered(base)
         if sortByPriority {
-            let order: [Priority] = [.alta, .media, .baja]
-            base.sort { order.firstIndex(of: $0.priority)! < order.firstIndex(of: $1.priority)! }
+            base.sort {
+                if $0.priority.rank != $1.priority.rank { return $0.priority.rank < $1.priority.rank }
+                return $0.due < $1.due
+            }
         }
         return base
     }
     
     var body: some View {
-        Screen {
+        Screen(searchable: true) {
             Header(eyebrow: "Organiza tu día", title: "Mis tareas",
                    subtitle: "Captura, prioriza y termina una cosa a la vez.")
             QuickAddField(placeholder: "¿Qué necesitas hacer?", button: "Crear tarea")
             
             ScrollView(.horizontal, showsIndicators: false) {
                 PillTabs(selection: $filter,
-                         counts: [.pendientes: store.pending.count, .completadas: store.completed.count],
+                         counts: [.pendientes: store.pending.count,
+                                  .completadas: store.completed.count,
+                                  .todas: store.tasks.count],
                          showIcons: true)
             }
-            .padding(10).background(Color.white)
+            .padding(10).background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             
             VStack(alignment: .leading, spacing: 6) {
@@ -45,18 +50,19 @@ struct TasksView: View {
                         Button("Fecha de entrega") { sortByPriority = false }
                         Button("Prioridad") { sortByPriority = true }
                     } label: {
-                        Label("Filtrar", systemImage: "slider.horizontal.3")
+                        Label("Ordenar", systemImage: "slider.horizontal.3")
                             .font(.subheadline.weight(.medium))
                             .padding(.horizontal, 14).padding(.vertical, 10)
                             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.25)))
                     }
                 }
-                ForEach(list) { t in
+                let items = list
+                ForEach(items) { t in
                     Divider()
                     TaskRow(task: t, showDelete: true)
                 }
-                if list.isEmpty {
-                    Text("No hay tareas en esta vista.")
+                if items.isEmpty {
+                    Text(store.query.isEmpty ? "No hay tareas en esta vista." : "Sin resultados para “\(store.query)”.")
                         .font(.footnote).foregroundColor(.gray).padding(.vertical, 20)
                 }
             }

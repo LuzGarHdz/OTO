@@ -125,7 +125,7 @@ final class AppStore: ObservableObject {
     private func save(_ value: Any, _ k: String) {
         UserDefaults.standard.set(value, forKey: "oto." + k)
     }
-    
+
     @Published var tasks: [TaskItem] {
         didSet {
             if let data = try? JSONEncoder().encode(tasks) { save(data, "tasks") }
@@ -133,7 +133,7 @@ final class AppStore: ObservableObject {
     }
     @Published var showAdd = false
     @Published var query = ""
-    
+
     @Published var isPlus = AppStore.bool("isPlus", false) {
         didSet { save(isPlus, "isPlus") }
     }
@@ -162,12 +162,13 @@ final class AppStore: ObservableObject {
     ) {
         didSet { save(timeZone, "timeZone") }
     }
-    
+
     // Aún sin función real (se muestran como "Próximamente")
     @Published var dailySummary = false
     @Published var focusSounds = false
     @Published var syncCalendar = false
-    
+    @Published private(set) var focusHistory: [FocusSession] = FocusHistoryStorage.load()
+
     init() {
         if let data = UserDefaults.standard.data(forKey: "oto.tasks"),
            let saved = try? JSONDecoder().decode([TaskItem].self, from: data) {
@@ -187,10 +188,10 @@ final class AppStore: ObservableObject {
             ]
         }
     }
-    
+
     var pending: [TaskItem] { tasks.filter { !$0.done }.sorted { $0.due < $1.due } }
     var completed: [TaskItem] { tasks.filter { $0.done } }
-    
+
     /// Aplica el texto de búsqueda (si lo hay) a una lista de tareas.
     func filtered(_ list: [TaskItem]) -> [TaskItem] {
         let q = query.trimmingCharacters(in: .whitespaces)
@@ -199,7 +200,7 @@ final class AppStore: ObservableObject {
             $0.title.localizedCaseInsensitiveContains(q) || $0.subject.localizedCaseInsensitiveContains(q)
         }
     }
-    
+
     func add(title: String, subject: String = "General", due: Date? = nil, priority: Priority = .media) {
         let t = title.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
@@ -210,7 +211,15 @@ final class AppStore: ObservableObject {
         if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i].done.toggle() }
     }
     func delete(_ task: TaskItem) { tasks.removeAll { $0.id == task.id } }
-    
+
+    func recordFocusSession(id: UUID, mode: String, minutes: Int, taskTitle: String?) {
+        guard !focusHistory.contains(where: { $0.id == id }) else { return }
+        let entry = FocusSession(id: id, completedAt: Date(), mode: mode,
+                                 minutes: minutes, taskTitle: taskTitle)
+        focusHistory.insert(entry, at: 0)
+        FocusHistoryStorage.save(focusHistory)
+    }
+
     /// Genera el plan de la semana a partir de las tareas pendientes:
     /// una sesión el día anterior a la entrega (o hoy si ya es tarde).
     func plan(weekStart: Date) -> [StudySession] {
@@ -219,13 +228,13 @@ final class AppStore: ObservableObject {
         let todayIdx = cal.dateComponents([.day], from: start, to: cal.startOfDay(for: Date())).day ?? 0
         var load: [Int: Int] = [:]
         var result: [StudySession] = []
-        
+
         for t in pending {
             let dueIdx = cal.dateComponents([.day], from: start, to: cal.startOfDay(for: t.due)).day ?? 0
             var idx = max(dueIdx - 1, todayIdx)
             if idx < 0 && dueIdx >= 0 { idx = 0 }
             guard (0..<7).contains(idx) else { continue }
-            
+
             let n = load[idx, default: 0]
             load[idx] = n + 1
             let minutes: Int
@@ -246,58 +255,175 @@ final class AppStore: ObservableObject {
     }
 }
 
+@MainActor
 final class FocusTimer: ObservableObject {
-    @Published var total = 25 * 60
-    @Published var remaining = 25 * 60
-    @Published var running = false
+    @Published private(set) var total = 25 * 60
+    @Published private(set) var remaining = 25 * 60
+    @Published private(set) var running = false
     @Published var mode: FocusMode = .pomodoro
-    @Published var customMinutes: Double
+    @Published var customMinutes: Double = Double(UserDefaults.standard.object(forKey: "oto.defaultFocus") as? Int ?? 30)
+    @Published private(set) var hasStarted = false
+    @Published private(set) var completionPending = false
+
     private var timer: Timer?
     private var endDate: Date?
-    
-    init() {
-        let saved = UserDefaults.standard.object(forKey: "oto.defaultFocus") as? Int ?? 30
-        customMinutes = Double(saved)
+    private let storageKey = "oto.focus.timer.v1"
+    private var sessionID = UUID()
+    @Published private(set) var selectedTaskTitle: String? = nil
+    @Published private(set) var selectedTaskID: UUID? = nil
+
+    private struct SavedState: Codable {
+        let total: Int
+        let remaining: Int
+        let running: Bool
+        let endDate: Date?
+        let hasStarted: Bool?
+        let completionPending: Bool?
+        let sessionID: UUID?
+        let selectedTaskTitle: String?
+        let selectedTaskID: UUID?
     }
-    
+
+    init() { restore() }
+
     var display: String { String(format: "%02d:%02d", remaining / 60, remaining % 60) }
-    var progress: Double { total == 0 ? 0 : 1 - Double(remaining) / Double(total) }
-    
-    func setMinutes(_ m: Int) {
-        stop()
-        total = max(1, min(m, 90)) * 60
-        remaining = total
+    var progress: Double {
+        guard total > 0 else { return 0 }
+        return min(1, max(0, 1 - Double(remaining) / Double(total)))
     }
-    func toggle() { running ? stop() : start() }
-    
+    var canChangeMode: Bool { !hasStarted && !completionPending }
+
+    func setMinutes(_ minutes: Int) {
+        guard canChangeMode else { return }
+        stopTicker()
+        total = max(1, min(minutes, 90)) * 60
+        remaining = total
+        running = false
+        endDate = nil
+        sessionID = UUID()
+        save()
+    }
+
+    func selectTask(_ task: TaskItem?) {
+        guard canChangeMode else { return }
+        selectedTaskID = task?.id
+        selectedTaskTitle = task?.title
+        save()
+    }
+
+    func toggle() { running ? pause() : start() }
+
     func start() {
-        guard !running, remaining > 0 else { return }
-        // Se calcula con una hora de fin: no se desfasa si la app pasa a segundo plano.
+        guard !running, remaining > 0, !completionPending else { return }
+        hasStarted = true
         endDate = Date().addingTimeInterval(TimeInterval(remaining))
         running = true
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+        save()
+        startTicker()
     }
-    
-    private func tick() {
-        guard let end = endDate else { return }
-        let left = max(0, Int(ceil(end.timeIntervalSinceNow)))
-        if left != remaining { remaining = left }
-        if left == 0 { stop() }
-    }
-    
-    func stop() {
-        if running, let end = endDate {
-            remaining = max(0, Int(ceil(end.timeIntervalSinceNow)))
-        }
+
+    func pause() {
+        guard running else { return }
+        updateRemaining()
+        guard running else { return }
         running = false
+        endDate = nil
+        stopTicker()
+        save()
+    }
+
+    func stop() { pause() }
+
+    func reset() {
+        stopTicker()
+        running = false
+        endDate = nil
+        remaining = total
+        hasStarted = false
+        completionPending = false
+        sessionID = UUID()
+        selectedTaskID = nil
+        selectedTaskTitle = nil
+        save()
+    }
+
+    func discardSession() { reset() }
+
+    // Returns an identifier exactly once for the confirmed session.
+    func confirmCompletion() -> (id: UUID, minutes: Int, taskTitle: String?)? {
+        refresh()
+        guard completionPending, remaining == 0 else { return nil }
+        let result = (id: sessionID, minutes: total / 60, taskTitle: selectedTaskTitle)
+        reset()
+        return result
+    }
+
+    func refresh() {
+        updateRemaining()
+        if running && timer == nil { startTicker() }
+    }
+
+    private func startTicker() {
+        stopTicker()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateRemaining() }
+        }
+    }
+
+    private func stopTicker() {
         timer?.invalidate()
         timer = nil
-        endDate = nil
     }
-    func reset() { stop(); remaining = total }
-    
+
+    private func updateRemaining() {
+        guard running, let endDate else { return }
+        remaining = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
+        if remaining == 0 {
+            running = false
+            self.endDate = nil
+            hasStarted = true
+            completionPending = true
+            stopTicker()
+            save()
+        }
+    }
+
+    private func save() {
+        let state = SavedState(total: total, remaining: remaining, running: running,
+                               endDate: endDate, hasStarted: hasStarted,
+                               completionPending: completionPending, sessionID: sessionID,
+                               selectedTaskTitle: selectedTaskTitle, selectedTaskID: selectedTaskID)
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        UserDefaults.standard.set(data, forKey: storageKey)
+    }
+
+    private func restore() {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let state = try? JSONDecoder().decode(SavedState.self, from: data) else { return }
+        total = max(60, min(state.total, 90 * 60))
+        remaining = max(0, min(state.remaining, total))
+        sessionID = state.sessionID ?? UUID()
+        selectedTaskTitle = state.selectedTaskTitle
+        selectedTaskID = state.selectedTaskID
+        hasStarted = state.hasStarted ?? (state.running || remaining < total)
+        completionPending = state.completionPending ?? (hasStarted && remaining == 0)
+        if completionPending {
+            remaining = 0
+            running = false
+            endDate = nil
+        } else if state.running, let savedEndDate = state.endDate {
+            endDate = savedEndDate
+            running = true
+            hasStarted = true
+            updateRemaining()
+            if running { startTicker() }
+        } else {
+            running = false
+            endDate = nil
+        }
+        save()
+    }
+
     deinit { timer?.invalidate() }
 }
 
@@ -325,7 +451,7 @@ func dueLabel(_ date: Date) -> String {
 struct OtoApp: App {
     @StateObject private var store = AppStore()
     @StateObject private var timer = FocusTimer()
-    
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -340,7 +466,7 @@ struct OtoApp: App {
 struct RootView: View {
     @EnvironmentObject var store: AppStore
     @State private var tab = 0
-    
+
     var body: some View {
         TabView(selection: $tab) {
             HomeView().tabItem { Label("Inicio", systemImage: "house") }.tag(0)
@@ -361,7 +487,7 @@ struct Screen<Content: View>: View {
     @ViewBuilder var content: () -> Content
     @State private var searching = false
     @FocusState private var searchFocused: Bool
-    
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -395,7 +521,7 @@ struct Screen<Content: View>: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             .background(Theme.card)
-            
+
             if searchable && searching {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundColor(.gray)
@@ -411,7 +537,7 @@ struct Screen<Content: View>: View {
                 .background(Theme.card)
                 .onAppear { searchFocused = true }
             }
-            
+
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) { content() }
@@ -446,7 +572,7 @@ struct QuickAddField: View {
     let placeholder: String
     let button: String
     @State private var text = ""
-    
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "plus")
@@ -487,7 +613,7 @@ struct TaskRow: View {
     @EnvironmentObject var store: AppStore
     let task: TaskItem
     var showDelete = false
-    
+
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             Button { withAnimation { store.toggle(task) } } label: {
@@ -526,7 +652,7 @@ struct PillTabs: View {
     @Binding var selection: TaskFilter
     let counts: [TaskFilter: Int]
     var showIcons = false
-    
+
     var body: some View {
         HStack(spacing: 6) {
             ForEach(TaskFilter.allCases) { f in
@@ -553,7 +679,7 @@ struct PillTabs: View {
 struct FocusSummaryCard: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var timer: FocusTimer
-    
+
     var body: some View {
         VStack(spacing: 18) {
             HStack(spacing: 12) {
@@ -577,7 +703,7 @@ struct FocusSummaryCard: View {
                 .monospacedDigit()
             ProgressView(value: timer.progress).tint(.white)
             Button { timer.toggle() } label: {
-                Label(timer.running ? "Pausar" : "Iniciar", systemImage: timer.running ? "pause.fill" : "play.fill")
+                Label(timer.completionPending ? "Finalizar en Enfoque" : (timer.running ? "Pausar" : "Iniciar"), systemImage: timer.running ? "pause.fill" : "play.fill")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(Theme.dark)
                     .frame(maxWidth: .infinity).padding(.vertical, 14)
@@ -624,7 +750,7 @@ struct AddTaskSheet: View {
     @State private var subject = "General"
     @State private var priority: Priority = .media
     @State private var due = Date()
-    
+
     var body: some View {
         NavigationStack {
             Form {
@@ -657,3 +783,4 @@ struct AddTaskSheet: View {
         }
     }
 }
+

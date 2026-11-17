@@ -4,7 +4,7 @@ struct TasksView: View {
     @EnvironmentObject var store: AppStore
     @State private var filter: TaskFilter = .pendientes
     @State private var sortByPriority = false
-    
+
     private var list: [TaskItem] {
         var base: [TaskItem]
         switch filter {
@@ -21,13 +21,13 @@ struct TasksView: View {
         }
         return base
     }
-    
+
     var body: some View {
         Screen(searchable: true) {
             Header(eyebrow: "Organiza tu día", title: "Mis tareas",
                    subtitle: "Captura, prioriza y termina una cosa a la vez.")
             QuickAddField(placeholder: "¿Qué necesitas hacer?", button: "Crear tarea")
-            
+
             ScrollView(.horizontal, showsIndicators: false) {
                 PillTabs(selection: $filter,
                          counts: [.pendientes: store.pending.count,
@@ -37,7 +37,7 @@ struct TasksView: View {
             }
             .padding(10).background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            
+
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {

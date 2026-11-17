@@ -3,7 +3,7 @@ import SwiftUI
 struct PlanView: View {
     @EnvironmentObject var store: AppStore
     @State private var weekOffset = 0
-    
+
     private var calendar: Calendar {
         var cal = Calendar(identifier: .gregorian)
         cal.firstWeekday = store.weekStartsMonday ? 2 : 1
@@ -30,18 +30,18 @@ struct PlanView: View {
         return f.string(from: day(i)).uppercased().replacingOccurrences(of: ".", with: "")
     }
     private var sessions: [StudySession] { store.plan(weekStart: weekStart) }
-    
+
     var body: some View {
         let sessions = self.sessions
         let totalMinutes = sessions.reduce(0) { $0 + $1.minutes }
-        
+
         Screen {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Plan de estudio").font(.system(size: 34, weight: .semibold))
                 Text("Un plan realista según tus tareas y tiempo disponible.")
                     .font(.subheadline).foregroundColor(Theme.muted)
             }
-            
+
             VStack(spacing: 0) {
                 HStack {
                     Button { weekOffset -= 1 } label: { Image(systemName: "chevron.left") }
@@ -79,7 +79,7 @@ struct PlanView: View {
             .background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
-            
+
             HStack(spacing: 14) {
                 Image(systemName: "scope")
                     .foregroundColor(Theme.accent)
@@ -97,7 +97,7 @@ struct PlanView: View {
                 Spacer()
             }
             .card()
-            
+
             HStack(spacing: 12) {
                 Image(systemName: "sparkles").foregroundColor(Color(red: 0.75, green: 0.70, blue: 1))
                 Text("Oto reorganiza tu plan cuando cambian tus tareas.")

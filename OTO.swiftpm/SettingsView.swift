@@ -5,14 +5,14 @@ struct SettingsView: View {
     @EnvironmentObject var timer: FocusTimer
     @State private var section = "Perfil"
     private let sections = ["Perfil", "Enfoque", "Calendario", "Apariencia"]
-    
+
     var body: some View {
         Screen {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Ajustes").font(.system(size: 34, weight: .semibold))
                 Text("Haz que OTO funcione a tu ritmo.").font(.subheadline).foregroundColor(Theme.muted)
             }
-            
+
             HStack(spacing: 4) {
                 ForEach(sections, id: \.self) { s in
                     Button { section = s } label: {
@@ -28,7 +28,7 @@ struct SettingsView: View {
             }
             .padding(8).background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            
+
             VStack(alignment: .leading, spacing: 16) {
                 switch section {
                 case "Perfil": profile
@@ -40,7 +40,7 @@ struct SettingsView: View {
             .card()
         }
     }
-    
+
     private var profile: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 14) {
@@ -62,7 +62,7 @@ struct SettingsView: View {
             toggleRow("Resumen diario", "Recibe tu plan cada mañana.", $store.dailySummary, soon: true)
         }
     }
-    
+
     private var focus: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Enfoque").font(.headline)
@@ -80,7 +80,7 @@ struct SettingsView: View {
             toggleRow("Oto Plus", "Desbloquea modo extremo y más.", $store.isPlus)
         }
     }
-    
+
     private var calendar: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Calendario").font(.headline)
@@ -89,14 +89,14 @@ struct SettingsView: View {
             toggleRow("Sincronizar calendario", "Importa tus eventos para planear mejor.", $store.syncCalendar, soon: true)
         }
     }
-    
+
     private var appearance: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Apariencia").font(.headline)
             toggleRow("Modo oscuro", "Usa colores oscuros en la app.", $store.darkMode)
         }
     }
-    
+
     private func field(_ label: String, text: Binding<String>, keyboard: UIKeyboardType = .default) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.caption.weight(.semibold))
@@ -108,7 +108,7 @@ struct SettingsView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.25)))
         }
     }
-    
+
     private func toggleRow(_ title: String, _ subtitle: String, _ value: Binding<Bool>, soon: Bool = false) -> some View {
         Toggle(isOn: value) {
             VStack(alignment: .leading, spacing: 2) {

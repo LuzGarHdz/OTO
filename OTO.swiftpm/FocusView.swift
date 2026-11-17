@@ -2,29 +2,29 @@ import SwiftUI
 
 // MARK: - Enfoque (Premium)
 
-private enum FocusMode: String, CaseIterable, Identifiable {
-    case pomodoro, extremo, personalizado
-    var id: String { rawValue }
-}
-
 struct FocusView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var timer: FocusTimer
     @AppStorage("oto.focus.mode")
     private var savedMode = FocusMode.pomodoro.rawValue
-    
+
     @AppStorage("oto.focus.customMinutes")
     private var customMinutes = 30.0
-    
+
     private var mode: FocusMode {
         FocusMode(rawValue: savedMode) ?? .pomodoro
     }
     @State private var showPaywall = false
+    @AppStorage("oto.focus.extremeMinutes") private var extremeMinutes = 50.0
+    @AppStorage("oto.focus.pomodoroCount") private var pomodoroCount = 0
+    // focus, breakReady, shortBreak, longBreak
+    @AppStorage("oto.focus.pomodoroPhase") private var pomodoroPhase = "focus"
+    @State private var showExtremeScreen = false
     @State private var showDiscardConfirmation = false
     @State private var pendingMode: FocusMode?
     @State private var showModeConfirmation = false
-    
+
     var body: some View {
         Screen {
             VStack(alignment: .leading, spacing: 6) {
@@ -32,24 +32,46 @@ struct FocusView: View {
                 Text("Protege este tiempo. El resto puede esperar.")
                     .font(.subheadline).foregroundColor(Theme.muted)
             }
-            
+
             modeCard(.pomodoro, icon: "clock", title: "Pomodoro",
-                     detail: "25 minutos de concentración y una pausa breve.",
+                     detail: "25 min de enfoque, 5 min de descanso; pausa larga cada 4 bloques.",
                      tag: "RECOMENDADO", dark: false)
             modeCard(.extremo, icon: "viewfinder", title: "Modo extremo",
-                     detail: "50 minutos de concentración para avanzar sin interrupciones.",
+                     detail: "Pantalla negra de concentración con duración configurable.",
                      tag: "OTO PLUS", dark: true)
             modeCard(.personalizado, icon: "gearshape", title: "Personalizado",
                      detail: "Adapta el bloque a tu energía y disponibilidad.",
                      tag: "1–90 MIN", dark: false)
-            
+
+            if mode == .pomodoro {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("CICLO POMODORO").font(.caption.weight(.semibold)).foregroundColor(Theme.accent)
+                    Text("Bloques completados en el ciclo: \(pomodoroCount % 4) de 4")
+                        .font(.subheadline)
+                    if pomodoroPhase == "breakReady" {
+                        Text(pomodoroCount % 4 == 0 ? "Toca un descanso largo de 15 minutos." : "Toca un descanso corto de 5 minutos.")
+                        Button("Comenzar descanso") { startBreak() }
+                            .buttonStyle(.borderedProminent)
+                        Button("Omitir descanso") { finishBreak() }
+                            .font(.caption)
+                    } else if isBreak {
+                        Text(pomodoroPhase == "longBreak" ? "Descanso largo" : "Descanso corto")
+                            .font(.headline)
+                        Text("Los descansos no se guardan como tiempo de estudio.")
+                            .font(.caption).foregroundColor(Theme.muted)
+                        Button("Omitir descanso") { finishBreak() }
+                            .font(.caption)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).card()
+            }
+
             VStack(spacing: 14) {
                 VStack(spacing: 4) {
                     Text("SESIÓN ACTUAL").font(.system(size: 10, weight: .semibold)).tracking(1)
                         .foregroundColor(Theme.accent)
-                    Text(timer.selectedTaskTitle ?? "Sesión libre")
+                    Text(isBreak ? "Descanso Pomodoro" : (timer.selectedTaskTitle ?? "Sesión libre"))
                         .font(.headline)
-                    if !timer.hasStarted && !timer.completionPending {
+                    if !timer.hasStarted && !timer.completionPending && !isBreak && pomodoroPhase != "breakReady" {
                         Menu {
                             Button("Sesión libre") { timer.selectTask(nil) }
                             ForEach(store.pending) { task in
@@ -73,47 +95,59 @@ struct FocusView: View {
                 ProgressView(value: timer.progress)
                     .accessibilityLabel("Progreso de la sesión")
                 if timer.completionPending {
-                    Text("¡Tiempo cumplido! Confirma tu sesión para guardarla.")
+                    Text(isBreak ? "¡Descanso terminado!" : "¡Tiempo cumplido! Confirma tu sesión para guardarla.")
                         .font(.subheadline).foregroundColor(Theme.accent)
                         .multilineTextAlignment(.center)
                     Button {
-                        if let result = timer.confirmCompletion() {
+                        if isBreak {
+                            finishBreak()
+                        } else if let result = timer.confirmCompletion() {
                             store.recordFocusSession(id: result.id, mode: mode.rawValue, minutes: result.minutes, taskTitle: result.taskTitle)
+                            if mode == .pomodoro {
+                                pomodoroCount += 1
+                                pomodoroPhase = "breakReady"
+                            }
                         }
                     } label: {
-                        Label("Finalizar sesión", systemImage: "checkmark.circle.fill")
+                        Label(isBreak ? "Terminar descanso" : "Finalizar sesión", systemImage: "checkmark.circle.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity).frame(height: 52)
                             .background(Theme.accent)
                             .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
-                    Button("Descartar sesión") { showDiscardConfirmation = true }
-                        .font(.caption)
-                }
-                if !timer.completionPending {
-                HStack(spacing: 12) {
-                    Button {
-                        if timer.hasStarted { showDiscardConfirmation = true }
-                        else { timer.reset() }
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                            .frame(width: 52, height: 52)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.3)))
+                    Button(isBreak ? "Omitir descanso" : "Descartar sesión") {
+                        if isBreak { finishBreak() }
+                        else { showDiscardConfirmation = true }
                     }
-                    .accessibilityLabel("Reiniciar sesión")
-                    Button { timer.toggle() } label: {
-                        Label(timer.running ? "Pausar" : "Iniciar",
-                              systemImage: timer.running ? "pause.fill" : "play.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .background(Theme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                    .disabled(timer.remaining == 0)
-                    .opacity(timer.remaining == 0 ? 0.5 : 1)
+                    .font(.caption)
                 }
+                if !timer.completionPending && pomodoroPhase != "breakReady" {
+                    HStack(spacing: 12) {
+                        Button {
+                            if timer.hasStarted { showDiscardConfirmation = true }
+                            else { timer.reset() }
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .frame(width: 52, height: 52)
+                                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.3)))
+                        }
+                        .accessibilityLabel("Reiniciar sesión")
+                        Button {
+                            timer.toggle()
+                            if mode == .extremo && timer.running { showExtremeScreen = true }
+                        } label: {
+                            Label(timer.running ? "Pausar" : "Iniciar",
+                                  systemImage: timer.running ? "pause.fill" : "play.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity).frame(height: 52)
+                            .background(Theme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .disabled(timer.remaining == 0)
+                        .opacity(timer.remaining == 0 ? 0.5 : 1)
+                    }
                 }
             }
             .frame(maxWidth: .infinity)
@@ -158,7 +192,10 @@ struct FocusView: View {
             .card()
         }
         .confirmationDialog("¿Descartar esta sesión?", isPresented: $showDiscardConfirmation) {
-            Button("Descartar y reiniciar", role: .destructive) { timer.discardSession() }
+            Button("Descartar y reiniciar", role: .destructive) {
+                if isBreak { finishBreak() }
+                else { timer.discardSession() }
+            }
             Button("Cancelar", role: .cancel) {}
         } message: {
             Text("El progreso actual no se guardará en el historial.")
@@ -167,6 +204,7 @@ struct FocusView: View {
             Button("Descartar sesión y cambiar", role: .destructive) {
                 if let requested = pendingMode {
                     timer.discardSession()
+                    pomodoroPhase = "focus"
                     applyMode(requested)
                 }
                 pendingMode = nil
@@ -179,21 +217,99 @@ struct FocusView: View {
             Button("Probar OTO Plus (demo)") { store.isPlus = true; select(.extremo) }
             Button("Ahora no", role: .cancel) {}
         } message: {
-            Text("El modo extremo ofrece sesiones de 50 minutos con OTO Plus. Puedes desbloquearlo en esta demo sin realizar pagos. Esta versión no bloquea notificaciones.")
+            Text("OTO Plus es una demostración sin pagos. El modo extremo usa una pantalla negra, pero no bloquea notificaciones ni otras aplicaciones.")
+        }
+        .fullScreenCover(isPresented: $showExtremeScreen) {
+            extremeScreen
+                .interactiveDismissDisabled()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 timer.refresh()
+                if mode == .extremo && timer.hasStarted { showExtremeScreen = true }
             }
         }
         .onAppear {
+            timer.mode = mode
             timer.refresh()
+            if mode == .extremo && timer.hasStarted { showExtremeScreen = true }
         }
     }
-    
+
+    private var extremeScreen: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 24) {
+                Spacer()
+                Text("OTO · MODO EXTREMO")
+                    .font(.caption.weight(.semibold))
+                    .tracking(3)
+                    .foregroundColor(.gray)
+                Text(timer.selectedTaskTitle ?? "Sesión libre")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                Text(timer.display)
+                    .font(.system(size: 78, weight: .ultraLight, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundColor(.white)
+                    .minimumScaleFactor(0.6)
+                ProgressView(value: timer.progress)
+                    .tint(.white)
+                    .padding(.horizontal, 32)
+                Text(timer.completionPending ? "Tiempo cumplido" : "Concéntrate en lo importante")
+                    .foregroundColor(.gray)
+                Spacer()
+                if timer.completionPending {
+                    Button("Finalizar sesión") {
+                        if let result = timer.confirmCompletion() {
+                            store.recordFocusSession(id: result.id, mode: mode.rawValue,
+                                                     minutes: result.minutes, taskTitle: result.taskTitle)
+                            showExtremeScreen = false
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundColor(.black)
+                } else {
+                    Button(timer.running ? "Pausar" : "Reanudar") { timer.toggle() }
+                        .foregroundColor(.white)
+                }
+                Button("Salir del modo extremo") { showExtremeScreen = false }
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .padding(.top, 8)
+                Text("Salir de esta pantalla no cancela el temporizador.")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+            .padding(32)
+        }
+        .preferredColorScheme(.dark)
+        .onAppear { timer.refresh() }
+    }
+
+    private var isBreak: Bool {
+        mode == .pomodoro && (pomodoroPhase == "shortBreak" || pomodoroPhase == "longBreak")
+    }
+
+    private func startBreak() {
+        guard mode == .pomodoro, pomodoroPhase == "breakReady" else { return }
+        let long = pomodoroCount % 4 == 0
+        pomodoroPhase = long ? "longBreak" : "shortBreak"
+        timer.setMinutes(long ? 15 : 5)
+        timer.start()
+    }
+
+    private func finishBreak() {
+        timer.discardSession()
+        pomodoroPhase = "focus"
+        timer.setMinutes(25)
+    }
+
     private func select(_ m: FocusMode) {
         guard m != .extremo || store.isPlus else { return }
-        
+
         if !timer.canChangeMode {
             pendingMode = m
             showModeConfirmation = true
@@ -203,19 +319,21 @@ struct FocusView: View {
     }
 
     private func applyMode(_ m: FocusMode) {
+        pomodoroPhase = "focus"
         savedMode = m.rawValue
+        timer.mode = m
         switch m {
         case .pomodoro:
             timer.setMinutes(25)
-            
+
         case .extremo:
-            timer.setMinutes(50)
-            
+            timer.setMinutes(Int(extremeMinutes))
+
         case .personalizado:
             timer.setMinutes(Int(customMinutes))
         }
     }
-    
+
     private func modeCard(_ m: FocusMode, icon: String, title: String, detail: String, tag: String, dark: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Button {
@@ -246,7 +364,21 @@ struct FocusView: View {
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(mode == m ? [.isSelected] : [])
-            
+
+            if m == .extremo && mode == .extremo {
+                Divider()
+                Text("Duración extrema: \(Int(extremeMinutes)) min")
+                    .font(.subheadline.weight(.medium))
+                Slider(value: $extremeMinutes, in: 1...90, step: 1)
+                    .onChange(of: extremeMinutes) { _, value in
+                        if timer.canChangeMode { timer.setMinutes(Int(value)) }
+                    }
+                    .disabled(!timer.canChangeMode)
+                Text("Al iniciar, OTO mostrará únicamente el tiempo restante sobre una pantalla negra. No bloquea notificaciones ni otras aplicaciones.")
+                    .font(.caption)
+
+            }
+
             if m == .personalizado && mode == .personalizado {
                 Divider()
                 Text("Duración: \(Int(customMinutes)) min")
@@ -271,7 +403,7 @@ struct FocusView: View {
         }
         .foregroundColor(dark ? .white : .primary)
         .padding(20)
-        .background(dark ? Theme.dark : Color.white)
+        .background(dark ? Theme.dark : Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -280,3 +412,4 @@ struct FocusView: View {
         .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
     }
 }
+

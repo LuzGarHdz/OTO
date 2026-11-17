@@ -125,7 +125,7 @@ final class AppStore: ObservableObject {
     private func save(_ value: Any, _ k: String) {
         UserDefaults.standard.set(value, forKey: "oto." + k)
     }
-
+    
     @Published var tasks: [TaskItem] {
         didSet {
             if let data = try? JSONEncoder().encode(tasks) { save(data, "tasks") }
@@ -133,7 +133,7 @@ final class AppStore: ObservableObject {
     }
     @Published var showAdd = false
     @Published var query = ""
-
+    
     @Published var isPlus = AppStore.bool("isPlus", false) {
         didSet { save(isPlus, "isPlus") }
     }
@@ -162,13 +162,13 @@ final class AppStore: ObservableObject {
     ) {
         didSet { save(timeZone, "timeZone") }
     }
-
+    
     // Aún sin función real (se muestran como "Próximamente")
     @Published var dailySummary = false
     @Published var focusSounds = false
     @Published var syncCalendar = false
     @Published private(set) var focusHistory: [FocusSession] = FocusHistoryStorage.load()
-
+    
     init() {
         if let data = UserDefaults.standard.data(forKey: "oto.tasks"),
            let saved = try? JSONDecoder().decode([TaskItem].self, from: data) {
@@ -188,10 +188,10 @@ final class AppStore: ObservableObject {
             ]
         }
     }
-
+    
     var pending: [TaskItem] { tasks.filter { !$0.done }.sorted { $0.due < $1.due } }
     var completed: [TaskItem] { tasks.filter { $0.done } }
-
+    
     /// Aplica el texto de búsqueda (si lo hay) a una lista de tareas.
     func filtered(_ list: [TaskItem]) -> [TaskItem] {
         let q = query.trimmingCharacters(in: .whitespaces)
@@ -200,7 +200,7 @@ final class AppStore: ObservableObject {
             $0.title.localizedCaseInsensitiveContains(q) || $0.subject.localizedCaseInsensitiveContains(q)
         }
     }
-
+    
     func add(title: String, subject: String = "General", due: Date? = nil, priority: Priority = .media) {
         let t = title.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
@@ -211,7 +211,7 @@ final class AppStore: ObservableObject {
         if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i].done.toggle() }
     }
     func delete(_ task: TaskItem) { tasks.removeAll { $0.id == task.id } }
-
+    
     func recordFocusSession(id: UUID, mode: String, minutes: Int, taskTitle: String?) {
         guard !focusHistory.contains(where: { $0.id == id }) else { return }
         let entry = FocusSession(id: id, completedAt: Date(), mode: mode,
@@ -219,39 +219,57 @@ final class AppStore: ObservableObject {
         focusHistory.insert(entry, at: 0)
         FocusHistoryStorage.save(focusHistory)
     }
-
-    /// Genera el plan de la semana a partir de las tareas pendientes:
-    /// una sesión el día anterior a la entrega (o hoy si ya es tarde).
+    
+    /// Demo: distribuye sesiones de estudio antes de la entrega, con un máximo
+    /// de tres sesiones diarias. Es una heurística, no una IA ni un calendario real.
     func plan(weekStart: Date) -> [StudySession] {
-        let cal = Calendar(identifier: .gregorian)
+        let cal = Calendar.current
         let start = cal.startOfDay(for: weekStart)
-        let todayIdx = cal.dateComponents([.day], from: start, to: cal.startOfDay(for: Date())).day ?? 0
-        var load: [Int: Int] = [:]
+        let today = cal.startOfDay(for: Date())
+        let todayIndex = cal.dateComponents([.day], from: start, to: today).day ?? 0
+        var dailyLoad = Array(repeating: 0, count: 7)
         var result: [StudySession] = []
-
-        for t in pending {
-            let dueIdx = cal.dateComponents([.day], from: start, to: cal.startOfDay(for: t.due)).day ?? 0
-            var idx = max(dueIdx - 1, todayIdx)
-            if idx < 0 && dueIdx >= 0 { idx = 0 }
-            guard (0..<7).contains(idx) else { continue }
-
-            let n = load[idx, default: 0]
-            load[idx] = n + 1
-            let minutes: Int
-            switch t.priority {
-            case .alta: minutes = 60
-            case .media: minutes = 45
-            case .baja: minutes = 30
-            }
-            let hour = min(16 + n, 22)
-            result.append(StudySession(
-                dayOffset: idx,
-                time: String(format: "%02d:00 · %d MIN", hour, minutes),
-                minutes: minutes,
-                subject: t.subject,
-                topic: t.title))
+        let ordered = pending.sorted {
+            if $0.priority.rank != $1.priority.rank { return $0.priority.rank < $1.priority.rank }
+            return $0.due < $1.due
         }
-        return result
+        
+        for task in ordered {
+            let dueIndex = cal.dateComponents([.day], from: start, to: cal.startOfDay(for: task.due)).day ?? 0
+            let earliest = max(0, todayIndex)
+            let latest = min(6, max(earliest, dueIndex))
+            guard earliest <= 6, dueIndex >= todayIndex else { continue }
+            
+            let duration: Int
+            let desiredSessions: Int
+            switch task.priority {
+            case .alta: duration = 50; desiredSessions = 3
+            case .media: duration = 40; desiredSessions = 2
+            case .baja: duration = 30; desiredSessions = 1
+            }
+            var assignedDays = Set<Int>()
+            for _ in 0..<desiredSessions {
+                let options = (earliest...latest).filter { dailyLoad[$0] < 3 && !assignedDays.contains($0) }
+                guard let chosen = options.min(by: {
+                    if dailyLoad[$0] != dailyLoad[$1] { return dailyLoad[$0] < dailyLoad[$1] }
+                    return $0 < $1
+                }) else { break }
+                let hour = 16 + dailyLoad[chosen] * 2
+                dailyLoad[chosen] += 1
+                assignedDays.insert(chosen)
+                result.append(StudySession(
+                    dayOffset: chosen,
+                    time: String(format: "%02d:00 · %d MIN", hour, duration),
+                    minutes: duration,
+                    subject: task.subject,
+                    topic: task.title
+                ))
+            }
+        }
+        return result.sorted {
+            if $0.dayOffset != $1.dayOffset { return $0.dayOffset < $1.dayOffset }
+            return $0.time < $1.time
+        }
     }
 }
 
@@ -264,14 +282,14 @@ final class FocusTimer: ObservableObject {
     @Published var customMinutes: Double = Double(UserDefaults.standard.object(forKey: "oto.defaultFocus") as? Int ?? 30)
     @Published private(set) var hasStarted = false
     @Published private(set) var completionPending = false
-
+    
     private var timer: Timer?
     private var endDate: Date?
     private let storageKey = "oto.focus.timer.v1"
     private var sessionID = UUID()
     @Published private(set) var selectedTaskTitle: String? = nil
     @Published private(set) var selectedTaskID: UUID? = nil
-
+    
     private struct SavedState: Codable {
         let total: Int
         let remaining: Int
@@ -283,16 +301,16 @@ final class FocusTimer: ObservableObject {
         let selectedTaskTitle: String?
         let selectedTaskID: UUID?
     }
-
+    
     init() { restore() }
-
+    
     var display: String { String(format: "%02d:%02d", remaining / 60, remaining % 60) }
     var progress: Double {
         guard total > 0 else { return 0 }
         return min(1, max(0, 1 - Double(remaining) / Double(total)))
     }
     var canChangeMode: Bool { !hasStarted && !completionPending }
-
+    
     func setMinutes(_ minutes: Int) {
         guard canChangeMode else { return }
         stopTicker()
@@ -303,16 +321,16 @@ final class FocusTimer: ObservableObject {
         sessionID = UUID()
         save()
     }
-
+    
     func selectTask(_ task: TaskItem?) {
         guard canChangeMode else { return }
         selectedTaskID = task?.id
         selectedTaskTitle = task?.title
         save()
     }
-
+    
     func toggle() { running ? pause() : start() }
-
+    
     func start() {
         guard !running, remaining > 0, !completionPending else { return }
         hasStarted = true
@@ -321,7 +339,7 @@ final class FocusTimer: ObservableObject {
         save()
         startTicker()
     }
-
+    
     func pause() {
         guard running else { return }
         updateRemaining()
@@ -331,9 +349,9 @@ final class FocusTimer: ObservableObject {
         stopTicker()
         save()
     }
-
+    
     func stop() { pause() }
-
+    
     func reset() {
         stopTicker()
         running = false
@@ -346,9 +364,9 @@ final class FocusTimer: ObservableObject {
         selectedTaskTitle = nil
         save()
     }
-
+    
     func discardSession() { reset() }
-
+    
     // Returns an identifier exactly once for the confirmed session.
     func confirmCompletion() -> (id: UUID, minutes: Int, taskTitle: String?)? {
         refresh()
@@ -357,24 +375,24 @@ final class FocusTimer: ObservableObject {
         reset()
         return result
     }
-
+    
     func refresh() {
         updateRemaining()
         if running && timer == nil { startTicker() }
     }
-
+    
     private func startTicker() {
         stopTicker()
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateRemaining() }
         }
     }
-
+    
     private func stopTicker() {
         timer?.invalidate()
         timer = nil
     }
-
+    
     private func updateRemaining() {
         guard running, let endDate else { return }
         remaining = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
@@ -387,7 +405,7 @@ final class FocusTimer: ObservableObject {
             save()
         }
     }
-
+    
     private func save() {
         let state = SavedState(total: total, remaining: remaining, running: running,
                                endDate: endDate, hasStarted: hasStarted,
@@ -396,7 +414,7 @@ final class FocusTimer: ObservableObject {
         guard let data = try? JSONEncoder().encode(state) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
     }
-
+    
     private func restore() {
         guard let data = UserDefaults.standard.data(forKey: storageKey),
               let state = try? JSONDecoder().decode(SavedState.self, from: data) else { return }
@@ -423,7 +441,7 @@ final class FocusTimer: ObservableObject {
         }
         save()
     }
-
+    
     deinit { timer?.invalidate() }
 }
 
@@ -451,7 +469,7 @@ func dueLabel(_ date: Date) -> String {
 struct OtoApp: App {
     @StateObject private var store = AppStore()
     @StateObject private var timer = FocusTimer()
-
+    
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -466,7 +484,7 @@ struct OtoApp: App {
 struct RootView: View {
     @EnvironmentObject var store: AppStore
     @State private var tab = 0
-
+    
     var body: some View {
         TabView(selection: $tab) {
             HomeView().tabItem { Label("Inicio", systemImage: "house") }.tag(0)
@@ -487,7 +505,7 @@ struct Screen<Content: View>: View {
     @ViewBuilder var content: () -> Content
     @State private var searching = false
     @FocusState private var searchFocused: Bool
-
+    
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -521,7 +539,7 @@ struct Screen<Content: View>: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             .background(Theme.card)
-
+            
             if searchable && searching {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundColor(.gray)
@@ -537,7 +555,7 @@ struct Screen<Content: View>: View {
                 .background(Theme.card)
                 .onAppear { searchFocused = true }
             }
-
+            
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) { content() }
@@ -572,7 +590,7 @@ struct QuickAddField: View {
     let placeholder: String
     let button: String
     @State private var text = ""
-
+    
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "plus")
@@ -613,7 +631,7 @@ struct TaskRow: View {
     @EnvironmentObject var store: AppStore
     let task: TaskItem
     var showDelete = false
-
+    
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             Button { withAnimation { store.toggle(task) } } label: {
@@ -652,7 +670,7 @@ struct PillTabs: View {
     @Binding var selection: TaskFilter
     let counts: [TaskFilter: Int]
     var showIcons = false
-
+    
     var body: some View {
         HStack(spacing: 6) {
             ForEach(TaskFilter.allCases) { f in
@@ -679,7 +697,7 @@ struct PillTabs: View {
 struct FocusSummaryCard: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var timer: FocusTimer
-
+    
     var body: some View {
         VStack(spacing: 18) {
             HStack(spacing: 12) {
@@ -750,7 +768,7 @@ struct AddTaskSheet: View {
     @State private var subject = "General"
     @State private var priority: Priority = .media
     @State private var due = Date()
-
+    
     var body: some View {
         NavigationStack {
             Form {

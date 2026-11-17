@@ -3,7 +3,8 @@ import SwiftUI
 struct PlanView: View {
     @EnvironmentObject var store: AppStore
     @State private var weekOffset = 0
-
+    @State private var generated = false
+    
     private var calendar: Calendar {
         var cal = Calendar(identifier: .gregorian)
         cal.firstWeekday = store.weekStartsMonday ? 2 : 1
@@ -30,26 +31,45 @@ struct PlanView: View {
         return f.string(from: day(i)).uppercased().replacingOccurrences(of: ".", with: "")
     }
     private var sessions: [StudySession] { store.plan(weekStart: weekStart) }
-
+    
     var body: some View {
-        let sessions = self.sessions
+        let sessions = generated ? self.sessions : []
         let totalMinutes = sessions.reduce(0) { $0 + $1.minutes }
-
+        
         Screen {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Plan de estudio").font(.system(size: 34, weight: .semibold))
                 Text("Un plan realista según tus tareas y tiempo disponible.")
                     .font(.subheadline).foregroundColor(Theme.muted)
             }
-
+            
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    generated = true
+                } label: {
+                    Label(generated ? "Regenerar mi plan" : "Generar mi plan", systemImage: "sparkles")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(14)
+                        .foregroundColor(.white)
+                        .background(Theme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                Text(generated
+                     ? "Plan sugerido según las fechas y prioridades de tus tareas pendientes."
+                     : "Pulsa el botón para distribuir automáticamente tus tareas de esta semana.")
+                .font(.caption)
+                .foregroundColor(Theme.muted)
+            }
+            
             VStack(spacing: 0) {
                 HStack {
-                    Button { weekOffset -= 1 } label: { Image(systemName: "chevron.left") }
+                    Button { weekOffset -= 1; generated = false } label: { Image(systemName: "chevron.left") }
                         .accessibilityLabel("Semana anterior")
                     Spacer()
                     Text(monthTitle).font(.headline)
                     Spacer()
-                    Button { weekOffset += 1 } label: { Image(systemName: "chevron.right") }
+                    Button { weekOffset += 1; generated = false } label: { Image(systemName: "chevron.right") }
                         .accessibilityLabel("Semana siguiente")
                 }
                 .padding(16)
@@ -79,7 +99,7 @@ struct PlanView: View {
             .background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
-
+            
             HStack(spacing: 14) {
                 Image(systemName: "scope")
                     .foregroundColor(Theme.accent)
@@ -90,14 +110,14 @@ struct PlanView: View {
                     Text("OBJETIVO SEMANAL").font(.system(size: 10, weight: .semibold)).foregroundColor(.gray)
                     Text("\(totalMinutes / 60) h \(totalMinutes % 60) min").font(.title.weight(.medium))
                     Text(sessions.isEmpty
-                         ? "Sin sesiones esta semana"
+                         ? generated ? "Sin tareas pendientes para esta semana" : "Genera tu plan para ver las sesiones"
                          : "\(sessions.count) sesion\(sessions.count == 1 ? "" : "es") planificada\(sessions.count == 1 ? "" : "s")")
                     .font(.caption).foregroundColor(Theme.muted)
                 }
                 Spacer()
             }
             .card()
-
+            
             HStack(spacing: 12) {
                 Image(systemName: "sparkles").foregroundColor(Color(red: 0.75, green: 0.70, blue: 1))
                 Text("Oto reorganiza tu plan cuando cambian tus tareas.")
@@ -110,3 +130,4 @@ struct PlanView: View {
         }
     }
 }
+

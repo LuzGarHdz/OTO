@@ -1,12 +1,24 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Tema
 
+private func dynamicColor(light: UIColor, dark: UIColor) -> Color {
+    Color(UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+}
+
 enum Theme {
     static let accent = Color(red: 0.49, green: 0.38, blue: 0.78)
-    static let accentSoft = Color(red: 0.93, green: 0.91, blue: 0.99)
+    static let accentSoft = dynamicColor(
+        light: UIColor(red: 0.93, green: 0.91, blue: 0.99, alpha: 1),
+        dark: UIColor(red: 0.25, green: 0.21, blue: 0.38, alpha: 1))
     static let dark = Color(red: 0.17, green: 0.14, blue: 0.23)
-    static let background = Color(red: 0.97, green: 0.97, blue: 0.98)
+    static let background = dynamicColor(
+        light: UIColor(red: 0.97, green: 0.97, blue: 0.98, alpha: 1),
+        dark: UIColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1))
+    static let card = dynamicColor(
+        light: .white,
+        dark: UIColor(red: 0.12, green: 0.11, blue: 0.16, alpha: 1))
     static let muted = Color.gray.opacity(0.8)
 }
 
@@ -14,7 +26,7 @@ struct CardStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(18)
-            .background(Color.white)
+            .background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
     }
@@ -26,9 +38,16 @@ extension View {
 
 // MARK: - Modelos
 
-enum Priority: String, CaseIterable, Identifiable {
+enum Priority: String, CaseIterable, Identifiable, Codable {
     case alta = "Alta", media = "Media", baja = "Baja"
     var id: String { rawValue }
+    var rank: Int {
+        switch self {
+        case .alta: return 0
+        case .media: return 1
+        case .baja: return 2
+        }
+    }
     var fg: Color {
         switch self {
         case .alta: return Color(red: 0.80, green: 0.30, blue: 0.35)
@@ -39,8 +58,8 @@ enum Priority: String, CaseIterable, Identifiable {
     var bg: Color { fg.opacity(0.14) }
 }
 
-struct TaskItem: Identifiable {
-    let id = UUID()
+struct TaskItem: Identifiable, Codable {
+    var id = UUID()
     var title: String
     var subject: String
     var due: Date
@@ -60,9 +79,21 @@ enum TaskFilter: String, CaseIterable, Identifiable {
     }
 }
 
+enum FocusMode: String, CaseIterable, Identifiable {
+    case pomodoro, extremo, personalizado
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .pomodoro: return "Pomodoro"
+        case .extremo: return "Modo extremo"
+        case .personalizado: return "Personalizado"
+        }
+    }
+}
+
 struct StudySession: Identifiable {
     let id = UUID()
-    let dayOffset: Int      // 0 = lunes
+    let dayOffset: Int      // 0 = primer día de la semana mostrada
     let time: String
     let minutes: Int
     let subject: String
@@ -71,67 +102,163 @@ struct StudySession: Identifiable {
 
 let subjectColors: [String: Color] = [
     "Matemáticas": Color(red: 0.49, green: 0.38, blue: 0.78),
-    "Historia": Color(red: 0.49, green: 0.38, blue: 0.78),
+    "Historia": Color(red: 0.80, green: 0.40, blue: 0.45),
     "Ciencias": Color(red: 0.85, green: 0.60, blue: 0.25),
-    "Literatura": Color(red: 0.25, green: 0.65, blue: 0.45)
+    "Literatura": Color(red: 0.25, green: 0.65, blue: 0.45),
+    "General": Color(red: 0.45, green: 0.50, blue: 0.60)
 ]
-let subjects = ["Historia", "Matemáticas", "Ciencias", "Literatura"]
+let subjects = ["General", "Historia", "Matemáticas", "Ciencias", "Literatura"]
 
 // MARK: - Estado
 
 final class AppStore: ObservableObject {
-    @Published var tasks: [TaskItem]
-    @Published var showAdd = false
-    @Published var isPlus = false
-    @Published var firstName = "Laura"
-    @Published var lastName = "Martínez"
-    @Published var email = "laura@correo.com"
-    @Published var timeZone = "Madrid (GMT+2)"
-    @Published var dailySummary = true
-    @Published var focusSounds = false
+    // Persistencia sencilla con UserDefaults
+    private static func bool(_ k: String, _ def: Bool) -> Bool {
+        UserDefaults.standard.object(forKey: "oto." + k) as? Bool ?? def
+    }
+    private static func int(_ k: String, _ def: Int) -> Int {
+        UserDefaults.standard.object(forKey: "oto." + k) as? Int ?? def
+    }
+    private static func string(_ k: String, _ def: String) -> String {
+        UserDefaults.standard.string(forKey: "oto." + k) ?? def
+    }
+    private func save(_ value: Any, _ k: String) {
+        UserDefaults.standard.set(value, forKey: "oto." + k)
+    }
     
-    let sessions: [StudySession] = [
-        .init(dayOffset: 0, time: "10:00 · 45 MIN", minutes: 45, subject: "Matemáticas", topic: "Ejercicios"),
-        .init(dayOffset: 0, time: "16:30 · 30 MIN", minutes: 30, subject: "Literatura", topic: "Lectura"),
-        .init(dayOffset: 1, time: "17:00 · 60 MIN", minutes: 60, subject: "Ciencias", topic: "Presentación"),
-        .init(dayOffset: 2, time: "16:30 · 45 MIN", minutes: 45, subject: "Historia", topic: "Repaso"),
-        .init(dayOffset: 3, time: "19:00 · 25 MIN", minutes: 25, subject: "Literatura", topic: "Resumen")
-    ]
+    @Published var tasks: [TaskItem] {
+        didSet {
+            if let data = try? JSONEncoder().encode(tasks) { save(data, "tasks") }
+        }
+    }
+    @Published var showAdd = false
+    @Published var query = ""
+    
+    @Published var isPlus = AppStore.bool("isPlus", false) {
+        didSet { save(isPlus, "isPlus") }
+    }
+    @Published var darkMode = AppStore.bool("darkMode", false) {
+        didSet { save(darkMode, "darkMode") }
+    }
+    @Published var weekStartsMonday = AppStore.bool("weekStartsMonday", true) {
+        didSet { save(weekStartsMonday, "weekStartsMonday") }
+    }
+    @Published var defaultFocus = AppStore.int("defaultFocus", 30) {
+        didSet { save(defaultFocus, "defaultFocus") }
+    }
+    @Published var firstName = AppStore.string("firstName", "Laura") {
+        didSet { save(firstName, "firstName") }
+    }
+    @Published var lastName = AppStore.string("lastName", "Martínez") {
+        didSet { save(lastName, "lastName") }
+    }
+    @Published var email = AppStore.string("email", "laura@correo.com") {
+        didSet { save(email, "email") }
+    }
+    @Published var timeZone = AppStore.string(
+        "timeZone",
+        TimeZone.current.localizedName(for: .standard, locale: Locale(identifier: "es_ES"))
+        ?? TimeZone.current.identifier
+    ) {
+        didSet { save(timeZone, "timeZone") }
+    }
+    
+    // Aún sin función real (se muestran como "Próximamente")
+    @Published var dailySummary = false
+    @Published var focusSounds = false
+    @Published var syncCalendar = false
     
     init() {
-        let cal = Calendar.current
-        let now = Date()
-        func at(_ dayOffset: Int, _ hour: Int) -> Date {
-            let d = cal.date(byAdding: .day, value: dayOffset, to: now) ?? now
-            return cal.date(bySettingHour: hour, minute: 0, second: 0, of: d) ?? d
+        if let data = UserDefaults.standard.data(forKey: "oto.tasks"),
+           let saved = try? JSONDecoder().decode([TaskItem].self, from: data) {
+            tasks = saved
+        } else {
+            let cal = Calendar.current
+            let now = Date()
+            func at(_ dayOffset: Int, _ hour: Int) -> Date {
+                let d = cal.date(byAdding: .day, value: dayOffset, to: now) ?? now
+                return cal.date(bySettingHour: hour, minute: 0, second: 0, of: d) ?? d
+            }
+            tasks = [
+                TaskItem(title: "Terminar ensayo de Historia", subject: "Historia", due: at(0, 18), priority: .alta),
+                TaskItem(title: "Resolver ejercicios 12–20", subject: "Matemáticas", due: at(1, 12), priority: .media),
+                TaskItem(title: "Preparar presentación grupal", subject: "Ciencias", due: at(5, 12), priority: .alta),
+                TaskItem(title: "Leer capítulo 4", subject: "Literatura", due: at(-1, 12), priority: .baja, done: true)
+            ]
         }
-        tasks = [
-            TaskItem(title: "Terminar ensayo de Historia", subject: "Historia", due: at(0, 18), priority: .alta),
-            TaskItem(title: "Resolver ejercicios 12–20", subject: "Matemáticas", due: at(1, 12), priority: .media),
-            TaskItem(title: "Preparar presentación grupal", subject: "Ciencias", due: at(5, 12), priority: .alta),
-            TaskItem(title: "Leer capítulo 4", subject: "Literatura", due: at(-1, 12), priority: .baja, done: true)
-        ]
     }
     
     var pending: [TaskItem] { tasks.filter { !$0.done }.sorted { $0.due < $1.due } }
     var completed: [TaskItem] { tasks.filter { $0.done } }
     
-    func add(title: String, subject: String = "Historia", due: Date = Date(), priority: Priority = .media) {
+    /// Aplica el texto de búsqueda (si lo hay) a una lista de tareas.
+    func filtered(_ list: [TaskItem]) -> [TaskItem] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return list }
+        return list.filter {
+            $0.title.localizedCaseInsensitiveContains(q) || $0.subject.localizedCaseInsensitiveContains(q)
+        }
+    }
+    
+    func add(title: String, subject: String = "General", due: Date? = nil, priority: Priority = .media) {
         let t = title.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
-        tasks.append(TaskItem(title: t, subject: subject, due: due, priority: priority))
+        let endOfToday = Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: Date()) ?? Date()
+        tasks.append(TaskItem(title: t, subject: subject, due: due ?? endOfToday, priority: priority))
     }
     func toggle(_ task: TaskItem) {
         if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i].done.toggle() }
     }
     func delete(_ task: TaskItem) { tasks.removeAll { $0.id == task.id } }
+    
+    /// Genera el plan de la semana a partir de las tareas pendientes:
+    /// una sesión el día anterior a la entrega (o hoy si ya es tarde).
+    func plan(weekStart: Date) -> [StudySession] {
+        let cal = Calendar(identifier: .gregorian)
+        let start = cal.startOfDay(for: weekStart)
+        let todayIdx = cal.dateComponents([.day], from: start, to: cal.startOfDay(for: Date())).day ?? 0
+        var load: [Int: Int] = [:]
+        var result: [StudySession] = []
+        
+        for t in pending {
+            let dueIdx = cal.dateComponents([.day], from: start, to: cal.startOfDay(for: t.due)).day ?? 0
+            var idx = max(dueIdx - 1, todayIdx)
+            if idx < 0 && dueIdx >= 0 { idx = 0 }
+            guard (0..<7).contains(idx) else { continue }
+            
+            let n = load[idx, default: 0]
+            load[idx] = n + 1
+            let minutes: Int
+            switch t.priority {
+            case .alta: minutes = 60
+            case .media: minutes = 45
+            case .baja: minutes = 30
+            }
+            let hour = min(16 + n, 22)
+            result.append(StudySession(
+                dayOffset: idx,
+                time: String(format: "%02d:00 · %d MIN", hour, minutes),
+                minutes: minutes,
+                subject: t.subject,
+                topic: t.title))
+        }
+        return result
+    }
 }
 
 final class FocusTimer: ObservableObject {
     @Published var total = 25 * 60
     @Published var remaining = 25 * 60
     @Published var running = false
+    @Published var mode: FocusMode = .pomodoro
+    @Published var customMinutes: Double
     private var timer: Timer?
+    private var endDate: Date?
+    
+    init() {
+        let saved = UserDefaults.standard.object(forKey: "oto.defaultFocus") as? Int ?? 30
+        customMinutes = Double(saved)
+    }
     
     var display: String { String(format: "%02d:%02d", remaining / 60, remaining % 60) }
     var progress: Double { total == 0 ? 0 : 1 - Double(remaining) / Double(total) }
@@ -142,19 +269,32 @@ final class FocusTimer: ObservableObject {
         remaining = total
     }
     func toggle() { running ? stop() : start() }
+    
     func start() {
-        guard !running, timer == nil, remaining > 0 else { return }
+        guard !running, remaining > 0 else { return }
+        // Se calcula con una hora de fin: no se desfasa si la app pasa a segundo plano.
+        endDate = Date().addingTimeInterval(TimeInterval(remaining))
         running = true
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            self.remaining = max(0, self.remaining - 1)
-            if self.remaining == 0 { self.stop() }
-        }
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
+    
+    private func tick() {
+        guard let end = endDate else { return }
+        let left = max(0, Int(ceil(end.timeIntervalSinceNow)))
+        if left != remaining { remaining = left }
+        if left == 0 { stop() }
+    }
+    
     func stop() {
+        if running, let end = endDate {
+            remaining = max(0, Int(ceil(end.timeIntervalSinceNow)))
+        }
         running = false
         timer?.invalidate()
         timer = nil
+        endDate = nil
     }
     func reset() { stop(); remaining = total }
     
@@ -168,10 +308,13 @@ func dueLabel(_ date: Date) -> String {
     let f = DateFormatter()
     f.locale = Locale(identifier: "es_ES")
     if cal.isDateInToday(date) {
+        let c = cal.dateComponents([.hour, .minute], from: date)
+        if c.hour == 23 && c.minute == 59 { return "Hoy" }   // tarea sin hora específica
         f.dateFormat = "HH:mm"
         return "Hoy, \(f.string(from: date))"
     }
     if cal.isDateInTomorrow(date) { return "Mañana" }
+    if cal.isDateInYesterday(date) { return "Ayer" }
     f.dateFormat = "EEE, d MMM"
     return f.string(from: date).capitalized.replacingOccurrences(of: ".", with: "")
 }
@@ -189,6 +332,7 @@ struct OtoApp: App {
                 .environmentObject(store)
                 .environmentObject(timer)
                 .tint(Theme.accent)
+                .preferredColorScheme(store.darkMode ? .dark : .light)
         }
     }
 }
@@ -213,7 +357,10 @@ struct RootView: View {
 
 struct Screen<Content: View>: View {
     @EnvironmentObject var store: AppStore
+    var searchable = false
     @ViewBuilder var content: () -> Content
+    @State private var searching = false
+    @FocusState private var searchFocused: Bool
     
     var body: some View {
         VStack(spacing: 0) {
@@ -222,7 +369,19 @@ struct Screen<Content: View>: View {
                     .font(.system(size: 22, weight: .heavy, design: .rounded))
                     .tracking(2)
                 Spacer()
-                Image(systemName: "magnifyingglass").foregroundColor(.gray)
+                if searchable {
+                    Button {
+                        withAnimation {
+                            searching.toggle()
+                            if !searching { store.query = "" }
+                        }
+                    } label: {
+                        Image(systemName: searching ? "xmark" : "magnifyingglass")
+                            .foregroundColor(.gray)
+                            .frame(width: 32, height: 32)
+                    }
+                    .accessibilityLabel(searching ? "Cerrar búsqueda" : "Buscar tareas")
+                }
                 Button { store.showAdd = true } label: {
                     Image(systemName: "plus")
                         .font(.headline)
@@ -231,19 +390,39 @@ struct Screen<Content: View>: View {
                         .background(Theme.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityLabel("Nueva tarea")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-            .background(Color.white)
+            .background(Theme.card)
+            
+            if searchable && searching {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundColor(.gray)
+                    TextField("Buscar por título o materia", text: $store.query)
+                        .focused($searchFocused)
+                        .submitLabel(.search)
+                }
+                .padding(12)
+                .background(Theme.background)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+                .background(Theme.card)
+                .onAppear { searchFocused = true }
+            }
+            
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) { content() }
                     .padding(20)
+                    .padding(.bottom, 20)
                     .frame(maxWidth: 700)
                     .frame(maxWidth: .infinity)
             }
             .background(Theme.background)
         }
+        .background(Theme.card.ignoresSafeArea(edges: .top))
     }
 }
 
@@ -282,7 +461,7 @@ struct QuickAddField: View {
                 .font(.subheadline.weight(.semibold))
         }
         .padding(12)
-        .background(Color.white)
+        .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 10, y: 3)
     }
@@ -317,6 +496,7 @@ struct TaskRow: View {
                     .foregroundColor(task.done ? Theme.accent : .gray.opacity(0.5))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(task.done ? "Marcar como pendiente" : "Marcar como completada")
             VStack(alignment: .leading, spacing: 4) {
                 Text(task.title)
                     .font(.subheadline.weight(.semibold))
@@ -335,6 +515,7 @@ struct TaskRow: View {
                     Image(systemName: "trash").foregroundColor(.gray)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Eliminar tarea")
             }
         }
         .padding(.vertical, 10)
@@ -367,52 +548,7 @@ struct PillTabs: View {
     }
 }
 
-// MARK: - Inicio
-
-struct HomeView: View {
-    @EnvironmentObject var store: AppStore
-    @EnvironmentObject var timer: FocusTimer
-    @State private var filter: TaskFilter = .pendientes
-    
-    private var dateText: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "es_ES")
-        f.dateFormat = "EEEE, d 'de' MMMM"
-        return f.string(from: Date()).uppercased()
-    }
-    
-    var body: some View {
-        Screen {
-            let n = store.pending.count
-            Header(eyebrow: dateText,
-                   title: "Buenos días, \(store.firstName).",
-                   subtitle: "Tienes \(n) tarea\(n == 1 ? "" : "s") pendiente\(n == 1 ? "" : "s"). Empecemos por una.")
-            
-            QuickAddField(placeholder: "Añade una tarea rápida…", button: "Añadir")
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Mis tareas").font(.title3.weight(.medium))
-                Text("\(n) pendientes esta semana").font(.caption).foregroundColor(Theme.muted)
-                PillTabs(selection: $filter,
-                         counts: [.pendientes: store.pending.count, .completadas: store.completed.count])
-                .padding(.top, 4)
-                Divider()
-                let list = filter == .completadas ? store.completed : store.pending
-                ForEach(list) { t in
-                    TaskRow(task: t)
-                    if t.id != list.last?.id { Divider() }
-                }
-                if list.isEmpty {
-                    Text("Nada por aquí por ahora.")
-                        .font(.footnote).foregroundColor(.gray).padding(.vertical, 12)
-                }
-            }
-            .card()
-            
-            FocusSummaryCard()
-        }
-    }
-}
+// MARK: - Inicio (tarjeta de enfoque)
 
 struct FocusSummaryCard: View {
     @EnvironmentObject var store: AppStore
@@ -431,7 +567,7 @@ struct FocusSummaryCard: View {
                     Text("Un paso a la vez.").font(.caption).opacity(0.6)
                 }
                 Spacer()
-                Text("PLUS")
+                Text(timer.mode.title.uppercased())
                     .font(.system(size: 9, weight: .bold))
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.4)))
@@ -448,6 +584,8 @@ struct FocusSummaryCard: View {
                     .background(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .disabled(timer.remaining == 0)
+            .opacity(timer.remaining == 0 ? 0.5 : 1)
         }
         .foregroundColor(.white)
         .padding(20)
@@ -456,173 +594,7 @@ struct FocusSummaryCard: View {
     }
 }
 
-// MARK: - Mis tareas
-
-struct TasksView: View {
-    @EnvironmentObject var store: AppStore
-    @State private var filter: TaskFilter = .pendientes
-    @State private var sortByPriority = false
-    
-    private var list: [TaskItem] {
-        var base: [TaskItem]
-        switch filter {
-        case .pendientes: base = store.pending
-        case .completadas: base = store.completed
-        case .todas: base = store.tasks.sorted { $0.due < $1.due }
-        }
-        if sortByPriority {
-            let order: [Priority] = [.alta, .media, .baja]
-            base.sort { order.firstIndex(of: $0.priority)! < order.firstIndex(of: $1.priority)! }
-        }
-        return base
-    }
-    
-    var body: some View {
-        Screen {
-            Header(eyebrow: "Organiza tu día", title: "Mis tareas",
-                   subtitle: "Captura, prioriza y termina una cosa a la vez.")
-            QuickAddField(placeholder: "¿Qué necesitas hacer?", button: "Crear tarea")
-            
-            ScrollView(.horizontal, showsIndicators: false) {
-                PillTabs(selection: $filter,
-                         counts: [.pendientes: store.pending.count, .completadas: store.completed.count],
-                         showIcons: true)
-            }
-            .padding(10).background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(filter.rawValue).font(.title3.weight(.medium))
-                        Text(sortByPriority ? "Ordenadas por prioridad" : "Ordenadas por fecha de entrega")
-                            .font(.caption).foregroundColor(Theme.muted)
-                    }
-                    Spacer()
-                    Menu {
-                        Button("Fecha de entrega") { sortByPriority = false }
-                        Button("Prioridad") { sortByPriority = true }
-                    } label: {
-                        Label("Filtrar", systemImage: "slider.horizontal.3")
-                            .font(.subheadline.weight(.medium))
-                            .padding(.horizontal, 14).padding(.vertical, 10)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.25)))
-                    }
-                }
-                ForEach(list) { t in
-                    Divider()
-                    TaskRow(task: t, showDelete: true)
-                }
-                if list.isEmpty {
-                    Text("No hay tareas en esta vista.")
-                        .font(.footnote).foregroundColor(.gray).padding(.vertical, 20)
-                }
-            }
-            .card()
-        }
-    }
-}
-
-// MARK: - Plan
-
-struct PlanView: View {
-    @EnvironmentObject var store: AppStore
-    @State private var weekOffset = 0
-    
-    private var monday: Date {
-        var cal = Calendar(identifier: .gregorian)
-        cal.firstWeekday = 2
-        let start = cal.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
-        return cal.date(byAdding: .weekOfYear, value: weekOffset, to: start) ?? start
-    }
-    private func day(_ i: Int) -> Date {
-        Calendar.current.date(byAdding: .day, value: i, to: monday) ?? monday
-    }
-    private var monthTitle: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "es_ES")
-        f.dateFormat = "LLLL yyyy"
-        return f.string(from: monday).capitalized
-    }
-    private func dayLabel(_ i: Int) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "es_ES")
-        f.dateFormat = "EEE d"
-        return f.string(from: day(i)).uppercased().replacingOccurrences(of: ".", with: "")
-    }
-    private var totalMinutes: Int { store.sessions.reduce(0) { $0 + $1.minutes } }
-    
-    var body: some View {
-        Screen {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Plan de estudio").font(.system(size: 34, weight: .semibold))
-                Text("Un plan realista según tus tareas y tiempo disponible.")
-                    .font(.subheadline).foregroundColor(Theme.muted)
-            }
-            
-            VStack(spacing: 0) {
-                HStack {
-                    Button { weekOffset -= 1 } label: { Image(systemName: "chevron.left") }
-                    Spacer()
-                    Text(monthTitle).font(.headline)
-                    Spacer()
-                    Button { weekOffset += 1 } label: { Image(systemName: "chevron.right") }
-                }
-                .padding(16)
-                Divider()
-                ScrollView(.horizontal, showsIndicators: true) {
-                    HStack(alignment: .top, spacing: 0) {
-                        ForEach(0..<7, id: \.self) { i in
-                            let isToday = Calendar.current.isDateInToday(day(i))
-                            VStack(spacing: 8) {
-                                Text(dayLabel(i))
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundColor(isToday ? Theme.accent : .gray)
-                                    .padding(.top, 12)
-                                ForEach(store.sessions.filter { $0.dayOffset == i }) { s in
-                                    SessionBlock(session: s)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 6)
-                            .frame(width: 100, height: 360, alignment: .top)
-                            .background(isToday ? Theme.accentSoft.opacity(0.5) : Color.clear)
-                            Divider()
-                        }
-                    }
-                }
-            }
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
-            
-            HStack(spacing: 14) {
-                Image(systemName: "scope")
-                    .foregroundColor(Theme.accent)
-                    .frame(width: 50, height: 50)
-                    .background(Theme.accentSoft)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("OBJETIVO SEMANAL").font(.system(size: 10, weight: .semibold)).foregroundColor(.gray)
-                    Text("\(totalMinutes / 60) h \(totalMinutes % 60) min").font(.title.weight(.medium))
-                    Text("\(store.sessions.count) sesiones planificadas").font(.caption).foregroundColor(Theme.muted)
-                }
-                Spacer()
-            }
-            .card()
-            
-            HStack(spacing: 12) {
-                Image(systemName: "sparkles").foregroundColor(Color(red: 0.75, green: 0.70, blue: 1))
-                Text("Oto reorganiza tu plan cuando cambian tus tareas.")
-                    .font(.subheadline).foregroundColor(.white)
-                Spacer()
-            }
-            .padding(20)
-            .background(Theme.dark)
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        }
-    }
-}
+// MARK: - Plan (bloque de sesión)
 
 struct SessionBlock: View {
     let session: StudySession
@@ -633,6 +605,7 @@ struct SessionBlock: View {
             Text(session.subject).font(.caption.weight(.bold)).foregroundColor(color)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Text(session.topic).font(.system(size: 10)).foregroundColor(.gray)
+                .lineLimit(2)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -642,136 +615,18 @@ struct SessionBlock: View {
     }
 }
 
-// MARK: - Ajustes
-
-struct SettingsView: View {
-    @EnvironmentObject var store: AppStore
-    @State private var section = "Perfil"
-    private let sections = ["Perfil", "Enfoque", "Calendario", "Apariencia"]
-    @State private var defaultFocus = 25
-    @State private var weekStartsMonday = true
-    @State private var syncCalendar = false
-    @State private var darkMode = false
-    
-    var body: some View {
-        Screen {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Ajustes").font(.system(size: 34, weight: .semibold))
-                Text("Haz que OTO funcione a tu ritmo.").font(.subheadline).foregroundColor(Theme.muted)
-            }
-            
-            HStack(spacing: 4) {
-                ForEach(sections, id: \.self) { s in
-                    Button { section = s } label: {
-                        Text(s)
-                            .font(.footnote.weight(section == s ? .semibold : .regular))
-                            .foregroundColor(section == s ? Theme.accent : .primary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 11)
-                            .background(section == s ? Theme.accentSoft : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(8).background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            
-            VStack(alignment: .leading, spacing: 16) {
-                switch section {
-                case "Perfil": profile
-                case "Enfoque": focus
-                case "Calendario": calendar
-                default: appearance
-                }
-            }
-            .card()
-        }
-    }
-    
-    private var profile: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 14) {
-                Text(String(store.firstName.prefix(1)) + String(store.lastName.prefix(1)))
-                    .font(.headline).foregroundColor(Theme.accent)
-                    .frame(width: 54, height: 54)
-                    .background(Theme.accentSoft).clipShape(Circle())
-                VStack(alignment: .leading) {
-                    Text("Perfil personal").font(.headline)
-                    Text("Información visible en tu cuenta.").font(.caption).foregroundColor(Theme.muted)
-                }
-            }
-            Divider()
-            field("Nombre", text: $store.firstName)
-            field("Apellido", text: $store.lastName)
-            field("Correo", text: $store.email, keyboard: .emailAddress)
-            field("Zona horaria", text: $store.timeZone)
-            Divider()
-            toggleRow("Resumen diario", "Recibe tu plan cada mañana.", $store.dailySummary)
-            Divider()
-            toggleRow("Sonidos de enfoque", "Ruido blanco durante tus sesiones.", $store.focusSounds)
-        }
-    }
-    
-    private var focus: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Enfoque").font(.headline)
-            Stepper("Duración por defecto: \(defaultFocus) min", value: $defaultFocus, in: 15...90, step: 5)
-            Divider()
-            toggleRow("Sonidos de enfoque", "Ruido blanco durante tus sesiones.", $store.focusSounds)
-            Divider()
-            toggleRow("Oto Plus", "Desbloquea modo extremo y más.", $store.isPlus)
-        }
-    }
-    
-    private var calendar: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Calendario").font(.headline)
-            toggleRow("La semana empieza el lunes", "Cambia el inicio de semana en el plan.", $weekStartsMonday)
-            Divider()
-            toggleRow("Sincronizar calendario", "Importa tus eventos para planear mejor.", $syncCalendar)
-        }
-    }
-    
-    private var appearance: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Apariencia").font(.headline)
-            toggleRow("Modo oscuro", "Usa colores oscuros en la app.", $darkMode)
-        }
-    }
-    
-    private func field(_ label: String, text: Binding<String>, keyboard: UIKeyboardType = .default) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.caption.weight(.semibold))
-            TextField(label, text: text)
-                .keyboardType(keyboard)
-                .padding(14)
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.gray.opacity(0.25)))
-        }
-    }
-    
-    private func toggleRow(_ title: String, _ subtitle: String, _ value: Binding<Bool>) -> some View {
-        Toggle(isOn: value) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.weight(.semibold))
-                Text(subtitle).font(.caption).foregroundColor(Theme.muted)
-            }
-        }
-        .tint(Theme.accent)
-    }
-}
-
 // MARK: - Nueva tarea
 
 struct AddTaskSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
-    @State private var subject = "Historia"
+    @State private var subject = "General"
     @State private var priority: Priority = .media
     @State private var due = Date()
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section("Tarea") {
                     TextField("¿Qué necesitas hacer?", text: $title)
@@ -802,4 +657,3 @@ struct AddTaskSheet: View {
         }
     }
 }
-

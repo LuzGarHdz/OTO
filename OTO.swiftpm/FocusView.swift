@@ -2,16 +2,9 @@ import SwiftUI
 
 // MARK: - Enfoque (Premium)
 
-private enum FocusMode: String, CaseIterable, Identifiable {
-    case pomodoro, extremo, personalizado
-    var id: String { rawValue }
-}
-
 struct FocusView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var timer: FocusTimer
-    @State private var mode: FocusMode = .pomodoro
-    @State private var customMinutes = 30.0
     @State private var showPaywall = false
     
     var body: some View {
@@ -86,20 +79,26 @@ struct FocusView: View {
         } message: {
             Text("El modo extremo ofrece sesiones de 50 minutos con OTO Plus. Puedes desbloquearlo en esta demo sin realizar pagos. Esta versión no bloquea notificaciones.")
         }
+        // Si se desactiva Plus estando en modo extremo, volvemos a Pomodoro
+        .onChange(of: store.isPlus) { _, plus in
+            if !plus && timer.mode == .extremo { select(.pomodoro) }
+        }
     }
     
     private func select(_ m: FocusMode) {
         guard m != .extremo || store.isPlus else { return }
-        mode = m
+        guard timer.mode != m else { return }
+        timer.mode = m
         switch m {
         case .pomodoro: timer.setMinutes(25)
         case .extremo: timer.setMinutes(50)
-        case .personalizado: timer.setMinutes(Int(customMinutes))
+        case .personalizado: timer.setMinutes(Int(timer.customMinutes))
         }
     }
     
     private func modeCard(_ m: FocusMode, icon: String, title: String, detail: String, tag: String, dark: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let selected = timer.mode == m
+        return VStack(alignment: .leading, spacing: 16) {
             Button {
                 if m == .extremo && !store.isPlus { showPaywall = true } else { select(m) }
             } label: {
@@ -111,7 +110,7 @@ struct FocusView: View {
                             .background(dark ? Color.white.opacity(0.12) : Theme.accentSoft)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         Spacer()
-                        if mode == m {
+                        if selected {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(dark ? .white : Theme.accent)
                                 .accessibilityHidden(true)
@@ -127,14 +126,14 @@ struct FocusView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityAddTraits(mode == m ? [.isSelected] : [])
+            .accessibilityAddTraits(selected ? [.isSelected] : [])
             
-            if m == .personalizado && mode == .personalizado {
+            if m == .personalizado && selected {
                 Divider()
-                Text("Duración: \(Int(customMinutes)) min")
+                Text("Duración: \(Int(timer.customMinutes)) min")
                     .font(.subheadline.weight(.medium))
-                Slider(value: $customMinutes, in: 15...90, step: 1)
-                    .onChange(of: customMinutes) { _, minutes in
+                Slider(value: $timer.customMinutes, in: 15...90, step: 1)
+                    .onChange(of: timer.customMinutes) { _, minutes in
                         timer.setMinutes(Int(minutes))
                     }
                     .accessibilityLabel("Duración personalizada en minutos")
@@ -148,11 +147,11 @@ struct FocusView: View {
         }
         .foregroundColor(dark ? .white : .primary)
         .padding(20)
-        .background(dark ? Theme.dark : Color.white)
+        .background(dark ? Theme.dark : Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(mode == m ? Theme.accent : Color.clear, lineWidth: 2)
+                .stroke(selected ? Theme.accent : Color.clear, lineWidth: 2)
         )
         .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
     }

@@ -26,4 +26,4 @@ OTO busca integrar la **gestión de tareas, la planificación académica y las t
 
 ---
 
-**Proyecto académico desarrollado con SwiftUI para iOS.**
+**Proyecto académico desarrollado en el iOS Lab UANL.**
